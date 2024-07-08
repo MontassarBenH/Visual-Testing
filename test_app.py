@@ -13,8 +13,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from driver import configure_driver  
-from PIL import Image, ImageChops
+from driver import configure_driver
+from image_utils import compare_images_hash, compare_images, calculate_image_hash
+from PIL import Image, ImageChops, ImageTk
 import imagehash
 
 
@@ -79,6 +80,12 @@ class TestApp:
 
         ttk.Button(self.root, text="Run Test", command=self.run_test).pack(pady=10)
 
+        report_frame = ttk.LabelFrame(self.root, text="Test Report")
+        report_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+        self.report_text = tk.Text(report_frame, wrap=tk.WORD)
+        self.report_text.pack(fill=tk.BOTH, expand=True)
+
     def configure_driver(self):
         options = Options()
         options.headless = True
@@ -99,52 +106,82 @@ class TestApp:
         if len(self.screenshots) > 1:
             current_screenshot = self.screenshots[-1]
             current_time = datetime.strptime(timestamp, "%Y%m%d-%H%M%S")
-            
+
             # Look for the previous screenshot with the same description pattern
             similar_screenshot = None
             for prev_screenshot in reversed(self.screenshots[:-1]):
+                prev_description = "_".join(os.path.basename(prev_screenshot).split('_')[:-1])
                 prev_timestamp = os.path.basename(prev_screenshot).split('_')[-1][:-4]  # Extract timestamp part
                 prev_time = datetime.strptime(prev_timestamp, "%Y%m%d-%H%M%S")
-                
+
                 # Compare if the descriptions match and if the previous timestamp is earlier
-                if description in prev_screenshot and prev_time < current_time:
+                if prev_description == description and prev_time < current_time:
                     similar_screenshot = prev_screenshot
                     break
-            
+
             # Perform comparison if a similar screenshot is found
             if similar_screenshot:
-                difference = self.compare_images_hash(similar_screenshot, current_screenshot)
+                difference = self.compare_images(similar_screenshot, current_screenshot)
                 if difference:
-                    self.test_messages.append(f"Differences detected between {os.path.basename(similar_screenshot)} and {os.path.basename(current_screenshot)}.")
+                    self.test_messages.append(
+                        f"Differences detected between {os.path.basename(similar_screenshot)} and {os.path.basename(current_screenshot)}.")
                 else:
-                    self.test_messages.append(f"No differences detected between {os.path.basename(similar_screenshot)} and {os.path.basename(current_screenshot)}.")
+                    self.test_messages.append(
+                        f"No differences detected between {os.path.basename(similar_screenshot)} and {os.path.basename(current_screenshot)}.")
             else:
-                self.test_messages.append(f"No previous screenshot found for comparison with {os.path.basename(current_screenshot)}.")
+                self.test_messages.append(
+                    f"No previous screenshot found for comparison with {os.path.basename(current_screenshot)}.")
+    
+    def compare_images_hash(self, image1_path, image2_path):
+        hash1 = calculate_image_hash(image1_path)
+        hash2 = calculate_image_hash(image2_path)
+        return hash1 != hash2
+    
+    def compare_images(self, img1_path, img2_path):
+        img1 = Image.open(img1_path)
+        img2 = Image.open(img2_path)
 
+        diff = ImageChops.difference(img1, img2)
+        if diff.getbbox():
+            return True  # Images are different
+        return False  # Images are the same
+
+
+   
     def update_screenshot_canvas(self, image_path):
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
 
-        img = tk.PhotoImage(file=image_path)
-        label = tk.Label(self.scrollable_frame, image=img)
-        label.image = img
+        img = Image.open(image_path)
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        img = img.resize((canvas_width, int(img.height * (canvas_width / img.width))), Image.Resampling.LANCZOS)
+        photo_img = ImageTk.PhotoImage(img)
+
+        label = tk.Label(self.scrollable_frame, image=photo_img)
+        label.image = photo_img  # Keep a reference!
         label.pack()
 
     def load_last_screenshot(self):
         selected_test = self.test_var.get()
+        self.update_report(selected_test)  # Update the report text area for the specific test
+
         screenshots_dir = 'screenshots'
         if os.path.exists(screenshots_dir):
-            screenshots = [f for f in os.listdir(screenshots_dir) if f.endswith('.png')]
-            test_screenshots = [f for f in screenshots if f.startswith(selected_test)]
-            if test_screenshots:
-                latest_screenshot = max(test_screenshots, key=lambda x: os.path.getctime(os.path.join(screenshots_dir, x)))
+            screenshots = [f for f in os.listdir(screenshots_dir) if f.endswith('.png') and selected_test in f]
+            if screenshots:
+                latest_screenshot = max(screenshots, key=lambda x: os.path.getctime(os.path.join(screenshots_dir, x)))
                 self.update_screenshot_canvas(os.path.join(screenshots_dir, latest_screenshot))
             else:
-                self.test_messages.append(f"No screenshots found for test: {selected_test}")
+                self.report_text.insert(tk.END, f"No screenshots found for test: {selected_test}\n")
         else:
-            self.test_messages.append("Screenshots directory does not exist")
+            self.report_text.insert(tk.END, "Screenshots directory does not exist\n")
 
-   
+    def update_report(self, test_scenario):
+        self.report_text.delete(1.0, tk.END)
+        messages = [msg for msg in self.test_messages if test_scenario in msg]
+        report_content = "\n".join(messages)
+        self.report_text.insert(tk.END, report_content)
 
     def test_user_registration(self):
         self.driver.get(self.website_var.get())
@@ -153,15 +190,15 @@ class TestApp:
         self.driver.find_element(By.LINK_TEXT, "Register").click()
         self.take_screenshot("register_clicked_register")
 
-        self.driver.find_element(By.ID, "customer.firstName").send_keys("John")
-        self.driver.find_element(By.ID, "customer.lastName").send_keys("Doe")
-        self.driver.find_element(By.ID, "customer.address.street").send_keys("123 Main St")
+        self.driver.find_element(By.ID, "customer.firstName").send_keys("Montassar")
+        self.driver.find_element(By.ID, "customer.lastName").send_keys("Ben Hmida")
+        self.driver.find_element(By.ID, "customer.address.street").send_keys("123 Haupt Str")
         self.driver.find_element(By.ID, "customer.address.city").send_keys("Anytown")
         self.driver.find_element(By.ID, "customer.address.state").send_keys("Anystate")
         self.driver.find_element(By.ID, "customer.address.zipCode").send_keys("12345")
         self.driver.find_element(By.ID, "customer.phoneNumber").send_keys("555-1234")
         self.driver.find_element(By.ID, "customer.ssn").send_keys("123-45-6789")
-        self.driver.find_element(By.ID, "customer.username").send_keys("johndoe")
+        self.driver.find_element(By.ID, "customer.username").send_keys("Ben")
         self.driver.find_element(By.ID, "customer.password").send_keys("password")
         self.driver.find_element(By.ID, "repeatedPassword").send_keys("password")
         self.take_screenshot("register_filled_registration_form")
@@ -174,7 +211,7 @@ class TestApp:
         self.driver.get(self.website_var.get())
         self.take_screenshot("login_opened_home_page")
 
-        self.driver.find_element(By.NAME, "username").send_keys("johndoe")
+        self.driver.find_element(By.NAME, "username").send_keys("Ben")
         self.driver.find_element(By.NAME, "password").send_keys("password")
         self.driver.find_element(By.NAME, "password").send_keys(Keys.RETURN)
         self.take_screenshot("login_logged_in")
@@ -295,3 +332,8 @@ class TestApp:
         report_content = "\n".join(self.test_messages)
         report_text.insert(tk.END, report_content)
 
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TestApp(root)
+    root.mainloop()
