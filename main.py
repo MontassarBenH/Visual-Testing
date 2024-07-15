@@ -1,5 +1,4 @@
 import tkinter as tk
-from tkinter import ttk
 from test_app import TestApp
 
 if __name__ == "__main__":
