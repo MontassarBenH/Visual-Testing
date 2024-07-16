@@ -6,6 +6,13 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+
+  "testConfig": {
+    "website_url": "https://parabank.parasoft.com/parabank/index.htm",
+    "test_scenario": "register",
+    "headless": true
+  },
+
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -15,3 +22,5 @@
   "mocha":"^10.2.0"
 
 }
+
+

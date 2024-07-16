@@ -1,3 +1,5 @@
+import argparse
+import json
 import os
 import time
 from datetime import datetime
@@ -15,6 +17,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException,
 from PIL import Image, ImageChops, ImageTk
 from skimage.metrics import structural_similarity as ssim
 import numpy as np
+import cv2
 import test_scenarios
 
 class TestApp:
@@ -35,6 +38,9 @@ class TestApp:
         self.test_messages = []  # Store messages for the final report
         self.uploaded_image_path = None
 
+        self.test_var = tk.StringVar()
+        self.website_var = tk.StringVar()
+
         self.setup_ui()
 
     def setup_ui(self):
@@ -43,37 +49,13 @@ class TestApp:
 
         left_frame = ttk.Frame(main_frame)
         left_frame.grid(row=0, column=0, sticky="nsew")
-        
+
         right_frame = ttk.Frame(main_frame)
         right_frame.grid(row=0, column=1, sticky="nsew")
-        
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
+
+        main_frame.columnconfigure(0, weight=0)  
+        main_frame.columnconfigure(1, weight=5) 
         main_frame.rowconfigure(0, weight=1)
-
-        website_frame = ttk.LabelFrame(left_frame, text="Choose Website to Test")
-        website_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
-        self.website_var = tk.StringVar()
-        self.website_var.set("https://parabank.parasoft.com/parabank/index.htm")
-        self.website_var.trace('w', self.update_test_scenarios)
-
-        ttk.Label(website_frame, text="Select a website:").pack(pady=(10, 5))
-        ttk.Radiobutton(website_frame, text="ParaBank", variable=self.website_var,
-                        value="https://parabank.parasoft.com/parabank/index.htm").pack(anchor=tk.W)
-        ttk.Radiobutton(website_frame, text="Demo App", variable=self.website_var,
-                        value="http://localhost:3000/").pack(anchor=tk.W)
-        self.other_website_entry = ttk.Entry(website_frame, width=50)
-        self.other_website_entry.pack(pady=(0, 10))
-
-        self.test_frame = ttk.LabelFrame(left_frame, text="Choose Test Scenario")
-        self.test_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
-        self.test_var = tk.StringVar()
-        self.update_test_scenarios()
-
-        ttk.Button(left_frame, text="Run Test", command=self.run_test).pack(pady=10)
-        ttk.Button(left_frame, text="Upload Image for Comparison", command=self.upload_image).pack(pady=10)
 
         report_frame = ttk.LabelFrame(left_frame, text="Test Report")
         report_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
@@ -84,7 +66,7 @@ class TestApp:
         screenshot_frame = ttk.LabelFrame(right_frame, text="Screenshots")
         screenshot_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
-        self.canvas = tk.Canvas(screenshot_frame, width=800)
+        self.canvas = tk.Canvas(screenshot_frame)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         scrollbar = tk.Scrollbar(screenshot_frame, orient=tk.VERTICAL, command=self.canvas.yview)
@@ -94,8 +76,7 @@ class TestApp:
         self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor=tk.NW)
         self.canvas.configure(yscrollcommand=scrollbar.set)
-        
-        self.canvas.bind("<Configure>", lambda e: self.reload_latest_screenshot())
+
 
     def upload_image(self):
         self.uploaded_image_path = filedialog.askopenfilename(
@@ -116,7 +97,7 @@ class TestApp:
             widget.destroy()
 
         ttk.Label(self.test_frame, text="Select a test scenario:").pack(pady=(10, 5))
-        
+
         if self.website_var.get() == "https://parabank.parasoft.com/parabank/index.htm":
             scenarios = [
                 ("Scenario 1: User Registration", "register"),
@@ -133,7 +114,7 @@ class TestApp:
         for text, value in scenarios:
             ttk.Radiobutton(self.test_frame, text=text, variable=self.test_var,
                             value=value, command=self.update_and_load_screenshots).pack(anchor=tk.W)
-            
+
     def update_and_load_screenshots(self):
         self.update_test_scenarios()
         self.load_screenshots_for_test()
@@ -144,51 +125,80 @@ class TestApp:
         scenario = self.test_var.get()
         if not os.path.exists(f'screenshots/{scenario}'):
             os.makedirs(f'screenshots/{scenario}')
-        
+
         filename = f"screenshots/{scenario}/{description}.png"
         self.driver.save_screenshot(filename)
-        
+
         if scenario not in self.screenshots:
             self.screenshots[scenario] = []
         self.screenshots[scenario].append(filename)
 
     def compare_scenario_screenshots(self, scenario):
+        # Define the directory where the screenshots for the given scenario are stored
         screenshots_dir = f'screenshots/{scenario}'
+
+        # Check if the screenshots directory exists
         if os.path.exists(screenshots_dir):
-            previous_run_files = sorted([f for f in os.listdir(screenshots_dir) if f.endswith('.png')], key=lambda x: os.path.getctime(os.path.join(screenshots_dir, x)))
+            # Get the list of all PNG files in the screenshots directory, sorted by creation time
+            previous_run_files = sorted(
+                [f for f in os.listdir(screenshots_dir) if f.endswith('.png')],
+                key=lambda x: os.path.getctime(os.path.join(screenshots_dir, x))
+            )
+
+            # Get the list of screenshots taken during the current run for the given scenario
             current_run_files = self.screenshots.get(scenario, [])
 
+            # Iterate through pairs of current run screenshots and previous run screenshots
             for current, previous in zip(current_run_files, previous_run_files):
+                # Get the full path of the previous screenshot
                 previous_screenshot = os.path.join(screenshots_dir, previous)
-                ssim_index = self.compare_images(previous_screenshot, current)
-                if ssim_index < 0.99:
-                    self.test_messages.append(f"Differences detected in {scenario}: {os.path.basename(previous_screenshot)} vs {os.path.basename(current)}")
-                else:
-                    self.test_messages.append(f"No significant differences detected between {os.path.basename(previous_screenshot)} and {os.path.basename(current)}.")
+                
+                # Compare the current screenshot with the previous one
+                ssim_index, hist_comparison, pixel_diff_percentage = self.compare_images(previous_screenshot, current)
+
+            # Check if the Structural Similarity Index (SSIM) is below 0.99, indicating significant differences
+            if ssim_index < 0.99 or hist_comparison < 0.95 or pixel_diff_percentage > 5:
+                # If differences are detected based on any of the three metrics
+                self.test_messages.append(f"Differences detected in {scenario}: {os.path.basename(previous_screenshot)} vs {os.path.basename(current)}")
+            else:
+                # If no significant differences are detected based on all three metrics
+                self.test_messages.append(f"No significant differences detected between {os.path.basename(previous_screenshot)} and {os.path.basename(current)}.")
+
+
+
 
     def update_screenshot_canvas(self, image_path):
         img = Image.open(image_path)
+
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
+
         img.thumbnail((canvas_width, canvas_height), Image.LANCZOS)
+
         img_tk = ImageTk.PhotoImage(img)
-        self.canvas.delete("all")
+
         self.canvas.create_image(canvas_width // 2, canvas_height // 2, image=img_tk, anchor=tk.CENTER)
         self.canvas.image = img_tk
 
     def load_screenshots_for_test(self):
         selected_test = self.test_var.get()
         screenshots_dir = f'screenshots/{selected_test}'
-        
-        self.canvas.delete("all")
-        
+
+        print(f"Loading screenshots for test: {selected_test}")
+
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+
         if os.path.exists(screenshots_dir):
             all_screenshots = [f for f in os.listdir(screenshots_dir) if f.endswith('.png')]
-            
+            print(f"Found {len(all_screenshots)} screenshots in directory: {screenshots_dir}")
+
             if all_screenshots:
-                all_screenshots.sort(key=lambda x: os.path.getctime(os.path.join(screenshots_dir, x)), reverse=True)
-                latest_screenshot = all_screenshots[0]
-                self.update_screenshot_canvas(os.path.join(screenshots_dir, latest_screenshot))
+                all_screenshots.sort(key=lambda x: os.path.getctime(os.path.join(screenshots_dir, x)))
+                for screenshot in all_screenshots:
+                    screenshot_path = os.path.join(screenshots_dir, screenshot)
+                    print(f"Displaying screenshot: {screenshot_path}")
+                    self.display_screenshot(screenshot_path)
             else:
                 self.test_messages.append(f"No screenshots found for test: {selected_test}")
                 self.show_test_report()
@@ -196,54 +206,90 @@ class TestApp:
             self.test_messages.append("Screenshots directory does not exist")
             self.show_test_report()
 
+    def display_screenshot(self, image_path):
+        try:
+            img = Image.open(image_path)
+            img.thumbnail((600, 600), Image.LANCZOS)  # Resize image to fit within the canvas width
+
+            img_tk = ImageTk.PhotoImage(img)
+
+            label = ttk.Label(self.scrollable_frame, image=img_tk)
+            label.image = img_tk  # Keep a reference to avoid garbage collection
+            label.pack(padx=5, pady=5)
+
+            print(f"Displayed image: {image_path}")
+        except Exception as e:
+            print(f"Error displaying image {image_path}: {e}")
+
+        self.scrollable_frame.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
     def compare_images(self, img1_path, img2_path):
+        # Open and convert images to grayscale
         img1 = Image.open(img1_path).convert('L')
         img2 = Image.open(img2_path).convert('L')
-        
-        # Crop images to the same size if needed 
-        img1_cropped = img1.crop((50, 50, img1.width - 50, img1.height - 50))
-        img2_cropped = img2.crop((50, 50, img2.width - 50, img2.height - 50))
-        
-        img1_np = np.array(img1_cropped)
-        img2_np = np.array(img2_cropped)
-        
+
+        # Resize images to the same size if they are not already
+        if img1.size != img2.size:
+            img2 = img2.resize(img1.size)
+
+        # Convert images to numpy arrays
+        img1_np = np.array(img1)
+        img2_np = np.array(img2)
+
+        # Structural Similarity Index (SSIM)
         ssim_index, diff = ssim(img1_np, img2_np, full=True)
+        print(f"SSIM Index: {ssim_index}")
+
+        # Save the difference image
         diff_image = Image.fromarray((diff * 255).astype(np.uint8))
         diff_image.save('diff_image.png')
-        
-        return ssim_index
+
+        # Histogram Comparison
+        hist1 = cv2.calcHist([img1_np], [0], None, [256], [0, 256])
+        hist2 = cv2.calcHist([img2_np], [0], None, [256], [0, 256])
+        hist_comparison = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+        print(f"Histogram Comparison: {hist_comparison}")
+
+        # Pixel-wise Comparison
+        diff_pixels = np.sum(img1_np != img2_np)
+        total_pixels = img1_np.size
+        pixel_diff_percentage = (diff_pixels / total_pixels) * 100
+        print(f"Pixel Difference Percentage: {pixel_diff_percentage}%")
+
+        return ssim_index, hist_comparison, pixel_diff_percentage
+
     
+
     def show_test_report(self):
         report_content = "\n".join(self.test_messages)
         self.report_text.delete(1.0, tk.END)
         self.report_text.insert(tk.END, report_content)
 
-    def run_test(self):
-        selected_test = self.test_var.get()
+    def run_test(self, scenario, website):
+        self.test_var.set(scenario)
+        self.website_var.set(website)
         self.test_messages.clear()
 
-        if not self.website_var.get() or (self.website_var.get() == "" and not self.other_website_entry.get()):
+        if not website:
             self.test_messages.append("Website Error: Please provide a website URL.")
             return
-
-        if self.website_var.get() == "":
-            self.website_var.set(self.other_website_entry.get())
 
         self.configure_driver()
         self.screenshots.clear()
 
         try:
-            if selected_test == "register":
+            if scenario == "register":
                 test_scenarios.test_user_registration(self)
-            elif selected_test == "login":
+            elif scenario == "login":
                 test_scenarios.test_user_login(self)
-            elif selected_test == "open_account":
+            elif scenario == "open_account":
                 test_scenarios.test_open_account(self)
-            elif selected_test == "overview":
+            elif scenario == "overview":
                 test_scenarios.test_account_overview_display(self)
-            elif selected_test == "view_overview":
+            elif scenario == "view_overview":
                 test_scenarios.test_view_account_overview(self)
-            elif selected_test == "visual_test":
+            elif scenario == "visual_test":
                 test_scenarios.run_visual_test(self)
         except NoSuchWindowException:
             self.test_messages.append("Error: Browser window was closed unexpectedly.")
@@ -253,6 +299,26 @@ class TestApp:
             if self.driver:
                 self.driver.quit()
 
-            if selected_test in self.screenshots:
-                self.compare_scenario_screenshots(selected_test)
+            if scenario in self.screenshots:
+                self.compare_scenario_screenshots(scenario)
+            self.load_screenshots_for_test()
             self.show_test_report()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run automated tests for web applications.")
+    parser.add_argument("--scenario", required=True, help="Name of the test scenario to run")
+    parser.add_argument("--website", required=True, help="Website URL to test")
+    args = parser.parse_args()
+
+    root = tk.Tk()
+    app = TestApp(root)
+
+    app.run_test(args.scenario, args.website)
+
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
+
