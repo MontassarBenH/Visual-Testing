@@ -1,32 +1,35 @@
-import argparse
-import json
 import os
 import time
+import glob
+import json
+import smtplib
+import argparse
 from datetime import datetime
-import tkinter as tk
-from tkinter import ttk, filedialog
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.support.ui import Select, WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, NoSuchWindowException
+from configparser import ConfigParser
+
+import numpy as np
+import pandas as pd
+import openpyxl
 from PIL import Image, ImageChops, ImageTk
 from skimage.metrics import structural_similarity as ssim
-import numpy as np
 import cv2
-import test_scenarios
-import smtplib
-import openpyxl
-import pandas as pd
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
-from configparser import ConfigParser
+from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException, NoSuchWindowException, TimeoutException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import Select, WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
+import tkinter as tk
+from tkinter import filedialog, ttk
+
+import test_scenarios
 
 
 class TestApp:
@@ -96,15 +99,6 @@ class TestApp:
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor=tk.NW)
         self.canvas.configure(yscrollcommand=scrollbar.set)
 
-    def reload_latest_screenshot(self):
-        if self.screenshots:
-            latest_screenshot_key = list(self.screenshots.keys())[-1]
-            latest_screenshot_path = self.screenshots[latest_screenshot_key][-1]
-            self.update_screenshot_canvas(latest_screenshot_path)
-
-    def update_and_load_screenshots(self):
-        self.load_screenshots_for_test()
-
     def take_screenshot(self, description):
         time.sleep(2)  # Wait for the page to load completely
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -118,9 +112,14 @@ class TestApp:
         if scenario not in self.screenshots:
             self.screenshots[scenario] = []
         self.screenshots[scenario].append(filename)
+
+         # Calculate the position in the grid
+        num_screenshots = len(self.screenshots[scenario])
+        column_index = (num_screenshots - 1) % 2  # 2 images per row
+        row_index = (num_screenshots - 1) // 2
         
         # Display the screenshot in the UI canvas
-        self.display_screenshot(filename)
+        self.display_screenshot(filename, column_index=column_index, row_index=row_index)
 
     def compare_scenario_screenshots(self, scenario):
         screenshots_dir = f'screenshots/{scenario}'
@@ -177,7 +176,21 @@ class TestApp:
                         "screenshot_2": os.path.basename(current)
                     })
 
-    def update_screenshot_canvas(self, image_path):
+    def delete_old_screenshots(self):
+        for scenario, screenshots in self.screenshots.items():
+            screenshots_dir = f'screenshots/{scenario}'
+            
+            # Get all screenshot files for the current scenario
+            all_screenshots = sorted(glob.glob(f"{screenshots_dir}/*.png"), key=os.path.getctime)
+            
+            # Keep only the last 4 screenshots
+            if len(all_screenshots) > 4:
+                old_screenshots = all_screenshots[:-4]  # All except the last 4
+                for screenshot in old_screenshots:
+                    os.remove(screenshot)
+                    print(f"Deleted old screenshot: {screenshot}")
+
+    def display_screenshot(self, image_path, column_index=0, row_index=0):
         try:
             img = Image.open(image_path)
 
@@ -185,61 +198,19 @@ class TestApp:
                 print(f"Failed to load image from {image_path}")
             else:
                 print(f"Image loaded successfully from {image_path}")
-
-            canvas_width = self.canvas.winfo_width()
-            canvas_height = self.canvas.winfo_height()
-
-            img.thumbnail((canvas_width, canvas_height), Image.LANCZOS)
-            img_tk = ImageTk.PhotoImage(img)
-
-            self.canvas.create_image(canvas_width // 2, canvas_height // 2, image=img_tk, anchor=tk.CENTER)
-            self.canvas.image = img_tk  # Keep reference to avoid garbage collection
-        except Exception as e:
-            print(f"Error updating screenshot canvas: {e}")
-
-    def load_screenshots_for_test(self):
-        selected_test = self.test_var.get()
-        screenshots_dir = f'screenshots/{selected_test}'
-
-        print(f"Loading screenshots for test: {selected_test}")
-
-        for widget in self.scrollable_frame.winfo_children():
-            widget.destroy()
-
-        if os.path.exists(screenshots_dir):
-            all_screenshots = [f for f in os.listdir(screenshots_dir) if f.endswith('.png')]
-            print(f"Found {len(all_screenshots)} screenshots in directory: {screenshots_dir}")
-            for screenshot in all_screenshots:
-                screenshot_path = os.path.join(screenshots_dir, screenshot)
-                print(f"Loading screenshot: {screenshot_path}")
-
-                img = Image.open(screenshot_path)
-                img.thumbnail((self.canvas.winfo_width(), self.canvas.winfo_height()), Image.LANCZOS)
-                img_tk = ImageTk.PhotoImage(img)
-
-                label = tk.Label(self.scrollable_frame, image=img_tk)
-                label.image = img_tk
-                label.pack(padx=5, pady=5)
-                
-    def display_screenshot(self, image_path):
-        try:
-            img = Image.open(image_path)
-
-            if img is None:
-                print(f"Failed to load image from {image_path}")
-            else:
-                print(f"Image loaded successfully from {image_path}")
+            
+            # Set new dimensions for larger images
+            new_width = 600  # Increase width
             width, height = img.size
             aspect_ratio = height / width
-            new_width = 200
             new_height = int(new_width * aspect_ratio)
+            
             img = img.resize((new_width, new_height), Image.LANCZOS)
-
             img_tk = ImageTk.PhotoImage(img)
 
             label = ttk.Label(self.scrollable_frame, image=img_tk)
-            label.image = img_tk  # Keep reference to avoid garbage collection
-            label.pack(pady=5)
+            label.image = img_tk  # Keep a reference to avoid garbage collection
+            label.grid(column=column_index, row=row_index, padx=5, pady=5)  # Use grid layout
         except Exception as e:
             print(f"Error loading image {image_path}: {e}")
 
@@ -247,30 +218,59 @@ class TestApp:
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def compare_images(self, img1_path, img2_path):
+        # Open and convert images to grayscale
         img1 = Image.open(img1_path).convert('L')
         img2 = Image.open(img2_path).convert('L')
 
+        # Resize img2 if sizes do not match
         if img1.size != img2.size:
             img2 = img2.resize(img1.size)
 
+        # Convert images to numpy arrays
         img1_np = np.array(img1)
         img2_np = np.array(img2)
 
+        # Calculate SSIM and obtain difference image
         ssim_index, diff = ssim(img1_np, img2_np, full=True)
         print(f"SSIM Index: {ssim_index}")
 
-        diff_image = Image.fromarray((diff * 255).astype(np.uint8))
-        diff_image.save('diff_image.png')
-
+        # Calculate histogram comparison
         hist1 = cv2.calcHist([img1_np], [0], None, [256], [0, 256])
         hist2 = cv2.calcHist([img2_np], [0], None, [256], [0, 256])
         hist_comparison = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
         print(f"Histogram Comparison: {hist_comparison}")
 
+        # Calculate pixel difference percentage
         diff_pixels = np.sum(img1_np != img2_np)
         total_pixels = img1_np.size
         pixel_diff_percentage = (diff_pixels / total_pixels) * 100
         print(f"Pixel Difference Percentage: {pixel_diff_percentage}%")
+
+        # Create and save the difference image
+        diff_image = (diff * 255).astype(np.uint8)
+        diff_image_path = 'diff_image.png'
+        cv2.imwrite(diff_image_path, diff_image)
+
+        # Create and save highlighted image if pixel difference percentage is higher than 20%
+        if pixel_diff_percentage > 20:
+            # Threshold the difference image
+            _, thresholded_diff = cv2.threshold(diff_image, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+
+            # Find contours of the differences
+            contours, _ = cv2.findContours(thresholded_diff, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            # Convert the first image to RGB
+            img1_color = cv2.cvtColor(img1_np, cv2.COLOR_GRAY2BGR)
+
+            # Draw bounding boxes around the differences
+            for contour in contours:
+                if cv2.contourArea(contour) > 10:  # Filter out small contours
+                    x, y, w, h = cv2.boundingRect(contour)
+                    cv2.rectangle(img1_color, (x, y), (x + w, y + h), (0, 0, 255), 2)
+
+            # Save the highlighted image
+            highlighted_img1_path = 'highlighted_Diff_img.png'
+            cv2.imwrite(highlighted_img1_path, img1_color)
 
         return ssim_index, hist_comparison, pixel_diff_percentage
 
@@ -310,6 +310,7 @@ class TestApp:
         msg.attach(part)
 
          # Attach the screenshots
+        latest_screenshot_time = 0
         for scenario, files in self.screenshots.items():
             for file_path in files:
                 attachment = open(file_path, "rb")
@@ -318,6 +319,27 @@ class TestApp:
                 encoders.encode_base64(part)
                 part.add_header('Content-Disposition', f"attachment; filename= {os.path.basename(file_path)}")
                 msg.attach(part)
+
+
+         # Update the latest screenshot time
+            screenshot_time = os.path.getmtime(file_path)
+            if screenshot_time > latest_screenshot_time:
+                latest_screenshot_time = screenshot_time
+          
+           # Get the current time of the test run
+            current_test_time = time.time()
+
+        # Check and attach the highlighted difference image if it exists and is new
+        highlighted_img_path = 'highlighted_Diff_img.png'
+        if os.path.exists(highlighted_img_path):
+            highlighted_img_time = os.path.getmtime(highlighted_img_path)
+            if highlighted_img_time >= latest_screenshot_time or highlighted_img_time >= current_test_time:
+                with open(highlighted_img_path, "rb") as attachment:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(attachment.read())
+                    encoders.encode_base64(part)
+                    part.add_header('Content-Disposition', f"attachment; filename= {os.path.basename(highlighted_img_path)}")
+                    msg.attach(part)
 
         try:
             server = smtplib.SMTP(smtp_server, smtp_port)
@@ -390,7 +412,6 @@ class TestApp:
             if scenario in self.screenshots:
                 self.compare_scenario_screenshots(scenario)
 
-            self.load_screenshots_for_test()
             self.show_test_report()
 
             # Save report to Excel
@@ -410,6 +431,9 @@ class TestApp:
                 to_email=email,
                 files=["test_report.xlsx"] + screenshots
             )
+
+            # Delete old screenshots
+            self.delete_old_screenshots()
 
     def save_report_to_excel(self):
         # Ensure any existing file is closed

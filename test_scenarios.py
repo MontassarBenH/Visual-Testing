@@ -24,9 +24,9 @@ def run_visual_test(app):
         updated_count = int(updated_count_text.split()[-2])
 
         if updated_count == initial_count + 1:
-            app.test_messages.append("Visual Test passed: Count incremented correctly after clicking 'Enable'.")
+            print("Visual Test passed: Count incremented correctly after clicking 'Enable'.")
         else:
-            app.test_messages.append("Visual Test failed: Count did not increment correctly after clicking 'Enable'.")
+            print("Visual Test failed: Count did not increment correctly after clicking 'Enable'.")
 
         disable_button = app.driver.find_element(By.XPATH, "//button[span='Disable']")
         disable_button.click()
@@ -34,9 +34,9 @@ def run_visual_test(app):
         app.take_screenshot("visual_test_after_disable")
     
     except NoSuchWindowException:
-        app.test_messages.append("Error: Browser window was closed unexpectedly.")
+        print("Error: Browser window was closed unexpectedly.")
     except Exception as e:
-        app.test_messages.append(f"Error: {str(e)}")
+        print(f"Error: {str(e)}")
 
 def test_user_registration(app):
     try:
@@ -63,9 +63,9 @@ def test_user_registration(app):
         app.driver.implicitly_wait(10)
         app.take_screenshot("register_submitted")
     except NoSuchWindowException:
-        app.test_messages.append("Error: Browser window was closed unexpectedly.")
+        print("Error: Browser window was closed unexpectedly.")
     except Exception as e:
-        app.test_messages.append(f"Error: {str(e)}")
+        print(f"Error: {str(e)}")
 
 def test_user_login(app):
     try:
@@ -77,9 +77,9 @@ def test_user_login(app):
         app.driver.find_element(By.NAME, "password").send_keys(Keys.RETURN)
         app.take_screenshot("login_logged_in")
     except NoSuchWindowException:
-        app.test_messages.append("Error: Browser window was closed unexpectedly.")
+        print("Error: Browser window was closed unexpectedly.")
     except Exception as e:
-        app.test_messages.append(f"Error: {str(e)}")
+        print(f"Error: {str(e)}")
 
 def test_open_account(app):
     try:
@@ -132,15 +132,13 @@ def test_open_account(app):
 
             except TimeoutException:
                 app.take_screenshot("open_account_button_timeout")
-                app.test_messages.append("Timeout Error: Failed to open a new account.")
 
         except TimeoutException:
             app.take_screenshot("open_account_link_timeout")
-            app.test_messages.append("Timeout Error: Failed to find 'Open New Account' link or button within 10 seconds.")
     except NoSuchWindowException:
-        app.test_messages.append("Error: Browser window was closed unexpectedly.")
+        print("Error: Browser window was closed unexpectedly.")
     except Exception as e:
-        app.test_messages.append(f"Error: {str(e)}")
+        print(f"Error: {str(e)}")
 
 def test_account_overview_display(app):
     try:
@@ -153,9 +151,9 @@ def test_account_overview_display(app):
         time.sleep(10)
         app.take_screenshot("overview_displayed")
     except NoSuchWindowException:
-        app.test_messages.append("Error: Browser window was closed unexpectedly.")
+        print("Error: Browser window was closed unexpectedly.")
     except Exception as e:
-        app.test_messages.append(f"Error: {str(e)}")
+        print(f"Error: {str(e)}")
 
 def test_view_account_overview(app):
     try:
@@ -168,6 +166,6 @@ def test_view_account_overview(app):
         time.sleep(10)
         app.take_screenshot("view_overview_displayed")
     except NoSuchWindowException:
-        app.test_messages.append("Error: Browser window was closed unexpectedly.")
+        print("Error: Browser window was closed unexpectedly.")
     except Exception as e:
-        app.test_messages.append(f"Error: {str(e)}")
+        print(f"Error: {str(e)}")
