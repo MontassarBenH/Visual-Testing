@@ -1,22 +1,24 @@
-import os
-import time
+# Standard library imports
+import argparse
 import glob
 import json
+import os
 import smtplib
-import argparse
-from datetime import datetime
+import subprocess
+import time
 from configparser import ConfigParser
-
-import numpy as np
-import pandas as pd
-import openpyxl
-from PIL import Image, ImageChops, ImageTk
-from skimage.metrics import structural_similarity as ssim
-import cv2
+from datetime import datetime
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+# Third-party imports
+import cv2
+import numpy as np
+import openpyxl
+import pandas as pd
+from PIL import Image, ImageChops, ImageTk
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, NoSuchWindowException, TimeoutException
 from selenium.webdriver.chrome.options import Options
@@ -25,11 +27,17 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
+from skimage.metrics import structural_similarity as ssim
 from webdriver_manager.chrome import ChromeDriverManager
+
+# Tkinter imports
 import tkinter as tk
 from tkinter import filedialog, ttk
 
+# Local application imports
+from data_loader import load_test_data
 import test_scenarios
+
 
 
 class TestApp:
@@ -37,8 +45,46 @@ class TestApp:
     def configure_driver(self):
         options = Options()
         options.headless = True
-        service = Service(ChromeDriverManager().install())
+        
+
+        # Disable first run dialogs
+        options.add_argument("--disable-search-engine-choice-screen")
+
+        # Install and get the path of the chromedriver
+        chromedriver_path = ChromeDriverManager().install()
+        print(f"ChromeDriver installed at: {chromedriver_path}")
+        
+        # Get the directory of the installed chromedriver
+        chromedriver_dir = os.path.dirname(chromedriver_path)
+        
+        # List files in the directory for debugging
+        print("Contents of the ChromeDriver directory:")
+        for file_name in os.listdir(chromedriver_dir):
+            print(file_name)
+        
+        # Find the actual chromedriver executable
+        chromedriver_executable = None
+        for file_name in os.listdir(chromedriver_dir):
+            if 'chromedriver' in file_name and os.access(os.path.join(chromedriver_dir, file_name), os.X_OK):
+                chromedriver_executable = os.path.join(chromedriver_dir, file_name)
+                break
+        
+        if not chromedriver_executable:
+            raise FileNotFoundError("Could not find the ChromeDriver executable in the directory.")
+        
+        print(f"Using ChromeDriver executable at: {chromedriver_executable}")
+        
+        # Verify the executable works
+        try:
+            subprocess.run([chromedriver_executable, '--version'], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error running ChromeDriver: {e}")
+            raise
+        
+        service = Service(chromedriver_executable)
         self.driver = webdriver.Chrome(service=service, options=options)
+
+ 
 
     def __init__(self, root):
         self.root = root
@@ -98,6 +144,31 @@ class TestApp:
         self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor=tk.NW)
         self.canvas.configure(yscrollcommand=scrollbar.set)
+
+    def find_element(self, by, value):
+        return WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((by, value)))
+
+
+    def click_element(self, by, value):
+        elem = self.find_element(by, value)
+        elem.click()
+
+    def fill_form(self, form_data):
+         for locator, value in form_data.items():
+            element = self.find_element(*locator)
+            element.clear()
+            element.send_keys(value)
+
+    def trans(css_selector):
+        return By.CSS_SELECTOR, css_selector
+    
+    def select_from_dropdown_by_value(self, by, value, option_value):
+        dropdown = Select(self.find_element(by, value))
+        dropdown.select_by_value(option_value)
+
+    def select_from_dropdown_by_index(self, by, value, index):
+        dropdown = Select(self.find_element(by, value))
+        dropdown.select_by_index(index)
 
     def take_screenshot(self, description):
         time.sleep(2)  # Wait for the page to load completely
@@ -352,7 +423,50 @@ class TestApp:
         except Exception as e:
             print(f"Failed to send email: {e}")
 
-    def run_test(self, scenario, website, email):
+    def save_report_to_excel(self):
+        # Ensure any existing file is closed
+        excel_file = 'test_report.xlsx'
+
+        # Create a temporary file to avoid conflicts
+        temp_file = 'temp_test_report.xlsx'
+
+        try:
+            # Save the report to a temporary file
+            df = pd.DataFrame(self.test_results)
+            df.to_excel(temp_file, index=False)
+            print(f"Report saved to {temp_file}")
+
+            # Load the workbook and adjust column widths
+            workbook = openpyxl.load_workbook(temp_file)
+            sheet = workbook.active
+
+            column_widths = {
+                'A': 50,  # Description
+                'B': 15,  # Status
+                'C': 20,  # Date
+                'D': 15,  # Commit Hash
+                'E': 20,  # Difference Percentage
+                'F': 30,  # Screenshot 1
+                'G': 30   # Screenshot 2
+            }
+
+            for col, width in column_widths.items():
+                sheet.column_dimensions[col].width = width
+
+            # Save the workbook with adjusted column widths
+            workbook.save(excel_file)
+            print(f"Report saved to {excel_file} with adjusted column widths")
+
+        except Exception as e:
+            print(f"Error saving report to Excel: {e}")
+
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
+    def run_test(self, scenario, website, email,data=None):
+
         self.test_var.set(scenario)
         self.website_var.set(website)
         self.test_results.clear()
@@ -369,14 +483,16 @@ class TestApp:
             })
             return
 
-        self.configure_driver()
+         # Initialize WebSession with a WebDriver instance
+        self.configure_driver()  # Set up the WebDriver
+        #session = WebSession(self.driver, website)  # Create a WebSession instance
         self.screenshots.clear()
 
         try:
             if scenario == "register":
-                test_scenarios.test_user_registration(self)
+                test_scenarios.test_user_registration(self, data) 
             elif scenario == "login":
-                test_scenarios.test_user_login(self)
+                test_scenarios.test_user_login(self, data)
             elif scenario == "open_account":
                 test_scenarios.test_open_account(self)
             elif scenario == "overview":
@@ -435,47 +551,6 @@ class TestApp:
             # Delete old screenshots
             self.delete_old_screenshots()
 
-    def save_report_to_excel(self):
-        # Ensure any existing file is closed
-        excel_file = 'test_report.xlsx'
-
-        # Create a temporary file to avoid conflicts
-        temp_file = 'temp_test_report.xlsx'
-
-        try:
-            # Save the report to a temporary file
-            df = pd.DataFrame(self.test_results)
-            df.to_excel(temp_file, index=False)
-            print(f"Report saved to {temp_file}")
-
-            # Load the workbook and adjust column widths
-            workbook = openpyxl.load_workbook(temp_file)
-            sheet = workbook.active
-
-            column_widths = {
-                'A': 50,  # Description
-                'B': 15,  # Status
-                'C': 20,  # Date
-                'D': 15,  # Commit Hash
-                'E': 20,  # Difference Percentage
-                'F': 30,  # Screenshot 1
-                'G': 30   # Screenshot 2
-            }
-
-            for col, width in column_widths.items():
-                sheet.column_dimensions[col].width = width
-
-            # Save the workbook with adjusted column widths
-            workbook.save(excel_file)
-            print(f"Report saved to {excel_file} with adjusted column widths")
-
-        except Exception as e:
-            print(f"Error saving report to Excel: {e}")
-
-        finally:
-            # Clean up the temporary file
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
 
 
 def main():
@@ -488,7 +563,25 @@ def main():
     root = tk.Tk()
     app = TestApp(root)
 
-    app.run_test(args.scenario, args.website, args.email)
+    test_data = load_test_data("test_data.json")
+
+    print(f"Scenario Argument: {args.scenario}")  # Debugging line
+    print(f"Loaded Test Data: {test_data}")       # Debugging line
+
+     # Map scenario argument to JSON keys
+    scenario_key_map = {
+        "register": "user_registration",
+        "login": "user_login"
+    }
+
+
+    data_key = scenario_key_map.get(args.scenario, args.scenario)
+    # Get the specific data for the scenario
+    data = test_data.get(data_key, {})
+    print("Scenario Data: ", data)  # Debugging line
+
+
+    app.run_test(args.scenario, args.website, args.email,data)
 
     root.mainloop()
 
