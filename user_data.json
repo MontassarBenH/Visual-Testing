@@ -1,0 +1,28 @@
+{
+    "user_registration": {
+        "customer.firstName": "Montassar",
+        "customer.lastName": "Ben",
+        "customer.address.street": "123 Haupt St",
+        "customer.address.city": "Anytown",
+        "customer.address.state": "Anystate",
+        "customer.address.zipCode": "12345",
+        "customer.phoneNumber": "555-1234",
+        "customer.ssn": "123-45-6789",
+        "customer.username": "Montassar",
+        "customer.password": "password",
+        "repeatedPassword": "password"
+    },
+    "user_login": {
+        "customer.firstName": "Montassar",
+        "customer.lastName": "Ben",
+        "customer.address.street": "123 Haupt St",
+        "customer.address.city": "Anytown",
+        "customer.address.state": "Anystate",
+        "customer.address.zipCode": "12345",
+        "customer.phoneNumber": "555-1234",
+        "customer.ssn": "123-45-6789",
+        "customer.username": "Montassar",
+        "customer.password": "password",
+        "repeatedPassword": "password"
+    }
+}
