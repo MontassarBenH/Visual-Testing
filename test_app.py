@@ -1,72 +1,108 @@
-import tkinter as tk
+# Standard library imports
+import argparse
 import glob
-from tkinter import ttk, messagebox, simpledialog, filedialog
-import os
 import json
-import time
-from PIL import Image ,ImageTk
-import configparser
-
-
-from datetime import datetime
-from contextlib import contextmanager
-import configparser
+import os
 import smtplib
+import subprocess
+import time
+from configparser import ConfigParser
+from datetime import datetime
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
 
+# Third-party imports
+import cv2
+import numpy as np
 import openpyxl
 import pandas as pd
+from PIL import Image, ImageChops, ImageTk
 from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException, NoSuchWindowException, TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait ,Select
+from selenium.webdriver.support.ui import Select, WebDriverWait
+from skimage.metrics import structural_similarity as ssim
 from webdriver_manager.chrome import ChromeDriverManager
 
-from test_scenarios import TestScenarioFactory
+# Tkinter imports
+import tkinter as tk
+from tkinter import filedialog, ttk
+
+# Local application imports
+from data_loader import load_test_data
 from custom_data_form import CustomDataForm
-from image_comparison import compare_images
+import test_scenarios
+
+
 
 class TestApp:
 
     def configure_driver(self):
         options = Options()
         options.headless = True
+        
+
+        # Disable first run dialogs
         options.add_argument("--disable-search-engine-choice-screen")
 
+        # Install and get the path of the chromedriver
         chromedriver_path = ChromeDriverManager().install()
-        service = Service(chromedriver_path)
+        print(f"ChromeDriver installed at: {chromedriver_path}")
+        
+        # Get the directory of the installed chromedriver
+        chromedriver_dir = os.path.dirname(chromedriver_path)
+        
+        # List files in the directory for debugging
+        print("Contents of the ChromeDriver directory:")
+        for file_name in os.listdir(chromedriver_dir):
+            print(file_name)
+        
+        # Find the actual chromedriver executable
+        chromedriver_executable = None
+        for file_name in os.listdir(chromedriver_dir):
+            if 'chromedriver' in file_name and os.access(os.path.join(chromedriver_dir, file_name), os.X_OK):
+                chromedriver_executable = os.path.join(chromedriver_dir, file_name)
+                break
+        
+        if not chromedriver_executable:
+            raise FileNotFoundError("Could not find the ChromeDriver executable in the directory.")
+        
+        print(f"Using ChromeDriver executable at: {chromedriver_executable}")
+        
+        # Verify the executable works
+        try:
+            subprocess.run([chromedriver_executable, '--version'], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error running ChromeDriver: {e}")
+            raise
+        
+        service = Service(chromedriver_executable)
         self.driver = webdriver.Chrome(service=service, options=options)
 
-    @contextmanager
-    def get_driver(self):
-        self.configure_driver()
-        try:
-            yield self.driver
-        finally:
-            if self.driver:
-                self.driver.quit()
+ 
 
     def __init__(self, root):
         self.root = root
         self.root.title("Automated Testing Application")
-        self.root.state('zoomed')
+        self.root.state('zoomed')  # Open in fullscreen mode
 
         self.driver = None
         self.screenshots = {}
-        self.test_results = []
+        self.test_results = []  # Store test results for the final report
         self.uploaded_image_path = None
 
         self.test_var = tk.StringVar()
         self.website_var = tk.StringVar()
 
-        self.create_ui()
+        self.setup_ui()
 
-    def create_ui(self):
+    def setup_ui(self):
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -80,20 +116,23 @@ class TestApp:
         main_frame.columnconfigure(1, weight=5)
         main_frame.rowconfigure(0, weight=1)
 
-        self.create_report_frame(right_frame)
-        self.create_screenshot_frame(right_frame)
-
-    def create_report_frame(self, parent):
-        report_frame = ttk.LabelFrame(parent, text="Test Report")
+        # Configure report frame
+        report_frame = ttk.LabelFrame(right_frame, text="Test Report")
         report_frame.pack(padx=10, pady=10, fill=tk.X, expand=False)
 
         self.tree = ttk.Treeview(report_frame, columns=("Description", "Status", "Date", "Commit Hash", "Difference Percentage", "Screenshot 1", "Screenshot 2"), show='headings')
-        for col in self.tree['columns']:
-            self.tree.heading(col, text=col)
+        self.tree.heading("Description", text="Description")
+        self.tree.heading("Status", text="Status")
+        self.tree.heading("Date", text="Date")
+        self.tree.heading("Commit Hash", text="Commit Hash")
+        self.tree.heading("Difference Percentage", text="Difference Percentage")
+        self.tree.heading("Screenshot 1", text="Screenshot 1")
+        self.tree.heading("Screenshot 2", text="Screenshot 2")
+
         self.tree.pack(fill=tk.X, expand=False)
 
-    def create_screenshot_frame(self, parent):
-        screenshot_frame = ttk.LabelFrame(parent, text="Screenshots")
+        # Configure screenshot frame below report frame
+        screenshot_frame = ttk.LabelFrame(right_frame, text="Screenshots")
         screenshot_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
         self.canvas = tk.Canvas(screenshot_frame)
@@ -106,7 +145,6 @@ class TestApp:
         self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor=tk.NW)
         self.canvas.configure(yscrollcommand=scrollbar.set)
-
 
     def find_element(self, by, value):
         return WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((by, value)))
@@ -134,7 +172,7 @@ class TestApp:
         dropdown.select_by_index(index)
 
     def take_screenshot(self, description):
-        time.sleep(2)
+        time.sleep(2)  # Wait for the page to load completely
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         scenario = self.test_var.get()
         if not os.path.exists(f'screenshots/{scenario}'):
@@ -147,15 +185,16 @@ class TestApp:
             self.screenshots[scenario] = []
         self.screenshots[scenario].append(filename)
 
+         # Calculate the position in the grid
         num_screenshots = len(self.screenshots[scenario])
-        column_index = (num_screenshots - 1) % 2
+        column_index = (num_screenshots - 1) % 2  # 2 images per row
         row_index = (num_screenshots - 1) // 2
         
+        # Display the screenshot in the UI canvas
         self.display_screenshot(filename, column_index=column_index, row_index=row_index)
 
     def compare_scenario_screenshots(self, scenario):
         screenshots_dir = f'screenshots/{scenario}'
-        
 
         if os.path.exists(screenshots_dir):
             previous_run_files = sorted(
@@ -186,7 +225,7 @@ class TestApp:
 
             if previous:
                 previous_screenshot = os.path.join(screenshots_dir, previous)
-                ssim_index, hist_comparison, pixel_diff_percentage = compare_images(previous_screenshot, current)
+                ssim_index, hist_comparison, pixel_diff_percentage = self.compare_images(previous_screenshot, current)
 
                 if ssim_index < 0.99 or hist_comparison < 0.95 or pixel_diff_percentage > 5:
                     self.test_results.append({
@@ -250,6 +289,90 @@ class TestApp:
         self.scrollable_frame.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
+    def get_test_data(self, scenario):
+        choice = tk.messagebox.askyesno("Data Source", "Do you want to use pre-defined test data?")
+        if choice:
+            # Use pre-defined data from JSON file
+            return load_test_data("test_data.json").get(scenario, {})
+        else:
+            # Get custom data from user
+            return self.get_custom_data(scenario)
+        
+    def get_custom_data(self, scenario):
+        # Define the fields required for each scenario
+        fields = {
+            "register": [
+                "customer.firstName", "customer.lastName", "customer.address.street",
+                "customer.address.city", "customer.address.state", "customer.address.zipCode",
+                "customer.phoneNumber", "customer.ssn", "customer.username",
+                "customer.password", "repeatedPassword"
+            ],
+            "login": ["username", "password"],
+        }
+
+        default_data = {field: "" for field in fields.get(scenario, [])}
+        
+        custom_data_form = CustomDataForm(self.root, default_data)
+        self.root.wait_window(custom_data_form)
+        
+        return custom_data_form.result if custom_data_form.result else default_data
+
+    def compare_images(self, img1_path, img2_path):
+        # Open and convert images to grayscale
+        img1 = Image.open(img1_path).convert('L')
+        img2 = Image.open(img2_path).convert('L')
+
+        # Resize img2 if sizes do not match
+        if img1.size != img2.size:
+            img2 = img2.resize(img1.size)
+
+        # Convert images to numpy arrays
+        img1_np = np.array(img1)
+        img2_np = np.array(img2)
+
+        # Calculate SSIM and obtain difference image
+        ssim_index, diff = ssim(img1_np, img2_np, full=True)
+        print(f"SSIM Index: {ssim_index}")
+
+        # Calculate histogram comparison
+        hist1 = cv2.calcHist([img1_np], [0], None, [256], [0, 256])
+        hist2 = cv2.calcHist([img2_np], [0], None, [256], [0, 256])
+        hist_comparison = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+        print(f"Histogram Comparison: {hist_comparison}")
+
+        # Calculate pixel difference percentage
+        diff_pixels = np.sum(img1_np != img2_np)
+        total_pixels = img1_np.size
+        pixel_diff_percentage = (diff_pixels / total_pixels) * 100
+        print(f"Pixel Difference Percentage: {pixel_diff_percentage}%")
+
+        # Create and save the difference image
+        diff_image = (diff * 255).astype(np.uint8)
+        diff_image_path = 'diff_image.png'
+        cv2.imwrite(diff_image_path, diff_image)
+
+        # Create and save highlighted image if pixel difference percentage is higher than 20%
+        if pixel_diff_percentage > 20:
+            # Threshold the difference image
+            _, thresholded_diff = cv2.threshold(diff_image, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+
+            # Find contours of the differences
+            contours, _ = cv2.findContours(thresholded_diff, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            # Convert the first image to RGB
+            img1_color = cv2.cvtColor(img1_np, cv2.COLOR_GRAY2BGR)
+
+            # Draw bounding boxes around the differences
+            for contour in contours:
+                if cv2.contourArea(contour) > 10:  # Filter out small contours
+                    x, y, w, h = cv2.boundingRect(contour)
+                    cv2.rectangle(img1_color, (x, y), (x + w, y + h), (0, 0, 255), 2)
+
+            # Save the highlighted image
+            highlighted_img1_path = 'highlighted_Diff_img.png'
+            cv2.imwrite(highlighted_img1_path, img1_color)
+
+        return ssim_index, hist_comparison, pixel_diff_percentage
 
     def show_test_report(self):
         for row in self.tree.get_children():
@@ -261,7 +384,7 @@ class TestApp:
     def send_email_with_attachments(self, subject, body, to_email, files):
         config_path = os.path.join(os.path.expanduser('~'), 'Desktop', 'config.ini')
 
-        config = configparser.ConfigParser()
+        config = ConfigParser()
         config.read(config_path)
         from_email = config.get('credentials', 'email_address')
         password = config.get('credentials', 'email_password')
@@ -330,15 +453,19 @@ class TestApp:
             print(f"Failed to send email: {e}")
 
     def save_report_to_excel(self):
+        # Ensure any existing file is closed
         excel_file = 'test_report.xlsx'
+
+        # Create a temporary file to avoid conflicts
         temp_file = 'temp_test_report.xlsx'
 
         try:
-            print(f"Attempting to save report with {len(self.test_results)} results")
+            # Save the report to a temporary file
             df = pd.DataFrame(self.test_results)
             df.to_excel(temp_file, index=False)
-            print(f"Temporary file saved: {temp_file}")
+            print(f"Report saved to {temp_file}")
 
+            # Load the workbook and adjust column widths
             workbook = openpyxl.load_workbook(temp_file)
             sheet = workbook.active
 
@@ -355,167 +482,27 @@ class TestApp:
             for col, width in column_widths.items():
                 sheet.column_dimensions[col].width = width
 
+            # Save the workbook with adjusted column widths
             workbook.save(excel_file)
-            print(f"Final report saved: {excel_file}")
+            print(f"Report saved to {excel_file} with adjusted column widths")
 
         except Exception as e:
             print(f"Error saving report to Excel: {e}")
-            import traceback
-            traceback.print_exc()
 
         finally:
+            # Clean up the temporary file
             if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                    print(f"Temporary file removed: {temp_file}")
-                except Exception as e:
-                    print(f"Error removing temporary file: {e}")
-    
-    def get_custom_scenario_data(self):
-        form_data = {}
-        dropdown_data = {}
+                os.remove(temp_file)
 
-        def submit():
-            locator_type = locator_type_entry.get().upper()
-            locator_value = locator_value_entry.get()
-            input_value = input_value_entry.get()
+    def run_test(self, scenario, website, email,data=None):
 
-            if locator_type and locator_value and input_value:
-                locator = (getattr(By, locator_type), locator_value)
-                form_data[locator] = input_value
-
-            dropdown_locator_type = dropdown_locator_type_entry.get().upper()
-            dropdown_locator_value = dropdown_locator_value_entry.get()
-            selection_method = selection_method_entry.get().lower()
-            option_value = option_value_entry.get()
-
-            if dropdown_locator_type and dropdown_locator_value and selection_method and option_value:
-                if selection_method == 'value':
-                    dropdown_data = (getattr(By, dropdown_locator_type), dropdown_locator_value, 'value', option_value)
-                elif selection_method == 'index':
-                    dropdown_data = (getattr(By, dropdown_locator_type), dropdown_locator_value, 'index', int(option_value))
-
-            root.quit()
-            root.destroy()
-
-        root = tk.Tk()
-        root.title("Custom Scenario Setup")
-
-        tk.Label(root, text="Form Data").grid(row=0, column=0, columnspan=3)
-
-        tk.Label(root, text="Locator Type").grid(row=1, column=0)
-        tk.Label(root, text="Locator Value").grid(row=1, column=1)
-        tk.Label(root, text="Input Value").grid(row=1, column=2)
-
-        locator_type_entry = tk.Entry(root)
-        locator_value_entry = tk.Entry(root)
-        input_value_entry = tk.Entry(root)
-
-        locator_type_entry.grid(row=2, column=0)
-        locator_value_entry.grid(row=2, column=1)
-        input_value_entry.grid(row=2, column=2)
-
-        tk.Label(root, text="Dropdown Data").grid(row=3, column=0, columnspan=4)
-
-        tk.Label(root, text="Locator Type").grid(row=4, column=0)
-        tk.Label(root, text="Locator Value").grid(row=4, column=1)
-        tk.Label(root, text="Selection Method").grid(row=4, column=2)
-        tk.Label(root, text="Option Value/Index").grid(row=4, column=3)
-
-        dropdown_locator_type_entry = tk.Entry(root)
-        dropdown_locator_value_entry = tk.Entry(root)
-        selection_method_entry = tk.Entry(root)
-        option_value_entry = tk.Entry(root)
-
-        dropdown_locator_type_entry.grid(row=5, column=0)
-        dropdown_locator_value_entry.grid(row=5, column=1)
-        selection_method_entry.grid(row=5, column=2)
-        option_value_entry.grid(row=5, column=3)
-
-        tk.Button(root, text="Submit", command=submit).grid(row=6, column=1, columnspan=2)
-
-        root.mainloop()
-        
-        return form_data, dropdown_data
-
-    def run_custom_scenario(self, data):
-        # Implement the logic for the custom scenario using the data collected
-        form_data = data.get('form_data')
-        dropdown_data = data.get('dropdown_data')
-        
-        # Example: Fill the form with the provided data
-        if form_data:
-            self.fill_form(form_data)
-        
-        # Example: Select from dropdowns with the provided data
-        if dropdown_data:
-            by, value, method, option_value = dropdown_data
-            if method == 'value':
-                self.select_from_dropdown_by_value(by, value, option_value)
-            elif method == 'index':
-                self.select_from_dropdown_by_index(by, value, option_value)
-
-    def save_user_data(self, data):
-        with open("user_data.json", 'w') as file:
-            json.dump(data, file, indent=4)
-        print("Data has been saved to user_data.json")
-
-    def prompt_for_custom_data(self, default_data):
-        custom_data_form = CustomDataForm(self.root, default_data)
-        self.root.wait_window(custom_data_form)
-        return custom_data_form.result if custom_data_form.result else default_data
-
-    def run_test(self, scenario, website, email, data=None):
         self.test_var.set(scenario)
         self.website_var.set(website)
         self.test_results.clear()
 
         if not website:
-            self.handle_test_exception(ValueError("Website URL is required"))
-            return
-
-        use_custom_data = messagebox.askyesno("Data Input", "Do you want to enter custom data?")
-        if use_custom_data:
-            data = self.prompt_for_custom_data(data)
-            self.save_user_data({"user_registration": data, "user_login": data})
-
-        self.screenshots.clear()
-
-        with self.get_driver():
-            try:
-                test_function = TestScenarioFactory.get_scenario(scenario)
-                if test_function:
-                    test_function(self, data)
-                else:
-                    raise ValueError(f"Unknown scenario: {scenario}")
-            except Exception as e:
-                self.handle_test_exception(e)
-
-        if scenario in self.screenshots:
-            self.compare_scenario_screenshots(scenario)
-
-        self.show_test_report()
-        self.save_report_to_excel()
-        # Prepare the report content for email
-        report_content = "Description | Status | Date | Commit Hash | Difference Percentage | Screenshot 1 | Screenshot 2\n"
-        report_content += "-" * 80 + "\n"
-        for result in self.test_results:
-                report_content += f"{result['description']} | {result['status']} | {result['date']} | {result['commit_hash']} | {result['difference_percentage']} | {result['screenshot_1']} | {result['screenshot_2']}\n"
-
-        screenshots = [s for screenshot_list in self.screenshots.values() for s in screenshot_list]
-            # Send email with the latest Excel report and screenshots
-        self.send_email_with_attachments(
-                subject="Automated Test Report",
-                body=report_content,
-                to_email=email,
-                files=["test_report.xlsx"] + screenshots
-            )
-        self.delete_old_screenshots()
-
-    def handle_test_exception(self, exception):
-            description = f"Error: {str(exception)}"
             self.test_results.append({
-                "description": description,
+                "description": "Website Error: Please provide a website URL.",
                 "status": "Failure",
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "commit_hash": "N/A",
@@ -523,4 +510,113 @@ class TestApp:
                 "screenshot_1": "N/A",
                 "screenshot_2": "N/A"
             })
+            return
 
+         # Initialize WebSession with a WebDriver instance
+        self.configure_driver()  # Set up the WebDriver
+        #session = WebSession(self.driver, website)  # Create a WebSession instance
+        self.screenshots.clear()
+
+        try:
+
+            data = self.get_test_data(scenario)
+
+            if scenario == "register":
+                test_scenarios.test_user_registration(self, data) 
+            elif scenario == "login":
+                test_scenarios.test_user_login(self, data)
+            elif scenario == "open_account":
+                test_scenarios.test_open_account(self)
+            elif scenario == "overview":
+                test_scenarios.test_account_overview_display(self)
+            elif scenario == "view_overview":
+                test_scenarios.test_view_account_overview(self)
+            elif scenario == "visual_test":
+                test_scenarios.run_visual_test(self)
+        except NoSuchWindowException:
+            self.test_results.append({
+                "description": "Error: Browser window was closed unexpectedly.",
+                "status": "Failure",
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "commit_hash": "N/A",
+                "difference_percentage": "N/A",
+                "screenshot_1": "N/A",
+                "screenshot_2": "N/A"
+            })
+        except Exception as e:
+            self.test_results.append({
+                "description": f"Error: {str(e)}",
+                "status": "Failure",
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "commit_hash": "N/A",
+                "difference_percentage": "N/A",
+                "screenshot_1": "N/A",
+                "screenshot_2": "N/A"
+            })
+        finally:
+            if self.driver:
+                self.driver.quit()
+
+            if scenario in self.screenshots:
+                self.compare_scenario_screenshots(scenario)
+
+            self.show_test_report()
+
+            # Save report to Excel
+            self.save_report_to_excel()
+
+            # Prepare the report content for email
+            report_content = "Description | Status | Date | Commit Hash | Difference Percentage | Screenshot 1 | Screenshot 2\n"
+            report_content += "-" * 80 + "\n"
+            for result in self.test_results:
+                report_content += f"{result['description']} | {result['status']} | {result['date']} | {result['commit_hash']} | {result['difference_percentage']} | {result['screenshot_1']} | {result['screenshot_2']}\n"
+
+            screenshots = [s for screenshot_list in self.screenshots.values() for s in screenshot_list]
+            # Send email with the latest Excel report and screenshots
+            self.send_email_with_attachments(
+                subject="Automated Test Report",
+                body=report_content,
+                to_email=email,
+                files=["test_report.xlsx"] + screenshots
+            )
+
+            # Delete old screenshots
+            self.delete_old_screenshots()
+
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run automated tests for web applications.")
+    parser.add_argument("--scenario", required=True, help="Name of the test scenario to run")
+    parser.add_argument("--website", required=True, help="Website URL to test")
+    parser.add_argument("--email", required=True, help="Email address to send the report")
+    args = parser.parse_args()
+
+    root = tk.Tk()
+    app = TestApp(root)
+
+    test_data = load_test_data("test_data.json")
+
+    print(f"Scenario Argument: {args.scenario}")  # Debugging line
+    print(f"Loaded Test Data: {test_data}")       # Debugging line
+
+     # Map scenario argument to JSON keys
+    scenario_key_map = {
+        "register": "user_registration",
+        "login": "user_login"
+    }
+
+
+    data_key = scenario_key_map.get(args.scenario, args.scenario)
+    # Get the specific data for the scenario
+    data = test_data.get(data_key, {})
+    print("Scenario Data: ", data)  # Debugging line
+
+
+    app.run_test(args.scenario, args.website, args.email,data)
+
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

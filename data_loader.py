@@ -1,12 +1,12 @@
 import json
+import logging
 
-def load_test_data(file_path):
+def load_test_data(filename):
     try:
-        with open(file_path, 'r') as file:
-            return json.load(file)
-    except FileNotFoundError:
-        print(f"Error: Test data file '{file_path}' not found.")
-        return {}
-    except json.JSONDecodeError:
-        print(f"Error: Invalid JSON in test data file '{file_path}'.")
-        return {}
+        with open(filename, 'r') as file:
+            data = json.load(file)
+        logging.info(f"Test data loaded from {filename}")
+        return data
+    except Exception as e:
+        logging.error(f"Error loading test data from {filename}: {str(e)}")
+        return None

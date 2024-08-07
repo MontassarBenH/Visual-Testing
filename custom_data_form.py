@@ -13,18 +13,36 @@ class CustomDataForm(tk.Toplevel):
         self.grab_set()
 
     def create_form(self):
-        row = 0
-        for key, value in self.default_data.items():
-            label = tk.Label(self, text=key)
-            label.grid(row=row, column=0, padx=10, pady=5, sticky=tk.W)
-            entry = tk.Entry(self)
-            entry.insert(0, value)
-            entry.grid(row=row, column=1, padx=10, pady=5)
-            self.entries[key] = entry
-            row += 1
+        main_frame = ttk.Frame(self)
+        main_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
-        save_button = tk.Button(self, text="Save", command=self.save_data)
-        save_button.grid(row=row, column=0, columnspan=2, pady=10)
+        canvas = tk.Canvas(main_frame)
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        for key, value in self.default_data.items():
+            label = ttk.Label(scrollable_frame, text=key)
+            label.pack(fill=tk.X, padx=5, pady=2)
+            entry = ttk.Entry(scrollable_frame)
+            entry.insert(0, value)
+            entry.pack(fill=tk.X, padx=5, pady=2)
+            self.entries[key] = entry
+
+        save_button = ttk.Button(scrollable_frame, text="Save", command=self.save_data)
+        save_button.pack(pady=10)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
     def save_data(self):
         self.result = {key: entry.get() for key, entry in self.entries.items()}

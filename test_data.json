@@ -8,12 +8,12 @@
         "customer.address.zipCode": "12345",
         "customer.phoneNumber": "555-1234",
         "customer.ssn": "123-45-6789",
-        "customer.username": "Montassar",
+        "customer.username": "Monta",
         "customer.password": "password",
         "repeatedPassword": "password"
     },
     "user_login": {
-        "username": "Montassar",
+        "username": "Monta",
         "password": "password"
     }
 }
