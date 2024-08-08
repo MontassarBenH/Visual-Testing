@@ -12,6 +12,8 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from tkinter import messagebox
+import traceback
 
 # Third-party imports
 import cv2
@@ -19,6 +21,7 @@ import numpy as np
 import openpyxl
 import pandas as pd
 from PIL import Image, ImageChops, ImageTk
+import requests
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, NoSuchWindowException, TimeoutException
 from selenium.webdriver.chrome.options import Options
@@ -38,54 +41,69 @@ from tkinter import filedialog, ttk
 from data_loader import load_test_data
 from custom_data_form import CustomDataForm
 import test_scenarios
+from retry import retry
+
 
 
 
 class TestApp:
 
     def configure_driver(self):
+        if not hasattr(self, 'chromedriver_executable'):
+            # Install ChromeDriver only once
+            chromedriver_path = ChromeDriverManager().install()
+            print(f"ChromeDriver installed at: {chromedriver_path}")
+            
+            chromedriver_dir = os.path.dirname(chromedriver_path)
+            
+            # Find the actual chromedriver executable
+            for file_name in os.listdir(chromedriver_dir):
+                if 'chromedriver' in file_name and os.access(os.path.join(chromedriver_dir, file_name), os.X_OK):
+                    self.chromedriver_executable = os.path.join(chromedriver_dir, file_name)
+                    break
+            
+            if not self.chromedriver_executable:
+                raise FileNotFoundError("Could not find the ChromeDriver executable in the directory.")
+            
+            print(f"Using ChromeDriver executable at: {self.chromedriver_executable}")
+        
         options = Options()
         options.headless = True
-        
-
-        # Disable first run dialogs
         options.add_argument("--disable-search-engine-choice-screen")
-
-        # Install and get the path of the chromedriver
-        chromedriver_path = ChromeDriverManager().install()
-        print(f"ChromeDriver installed at: {chromedriver_path}")
+        options.add_argument("--no-first-run")
+        options.add_argument("--no-default-browser-check")
         
-        # Get the directory of the installed chromedriver
-        chromedriver_dir = os.path.dirname(chromedriver_path)
+        service = Service(self.chromedriver_executable)
         
-        # List files in the directory for debugging
-        print("Contents of the ChromeDriver directory:")
-        for file_name in os.listdir(chromedriver_dir):
-            print(file_name)
-        
-        # Find the actual chromedriver executable
-        chromedriver_executable = None
-        for file_name in os.listdir(chromedriver_dir):
-            if 'chromedriver' in file_name and os.access(os.path.join(chromedriver_dir, file_name), os.X_OK):
-                chromedriver_executable = os.path.join(chromedriver_dir, file_name)
-                break
-        
-        if not chromedriver_executable:
-            raise FileNotFoundError("Could not find the ChromeDriver executable in the directory.")
-        
-        print(f"Using ChromeDriver executable at: {chromedriver_executable}")
-        
-        # Verify the executable works
-        try:
-            subprocess.run([chromedriver_executable, '--version'], check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"Error running ChromeDriver: {e}")
-            raise
-        
-        service = Service(chromedriver_executable)
         self.driver = webdriver.Chrome(service=service, options=options)
+        self.driver.set_page_load_timeout(30)
+        
+        print(f"Chrome version: {self.driver.capabilities['browserVersion']}")
+        print(f"ChromeDriver version: {self.driver.capabilities['chrome']['chromedriverVersion'].split(' ')[0]}")
 
- 
+    def close_driver(self):
+        if hasattr(self, 'driver'):
+            self.driver.quit()
+
+    def health_check(self):
+        url = "https://parabank.parasoft.com/parabank/index.htm"  
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            print(f"Website {url} is accessible")
+            return True
+        except requests.RequestException as e:
+            print(f"Website {url} is not accessible: {e}")
+            return False
+        
+    def clear_browser_data(self):
+        try:
+            self.driver.delete_all_cookies()
+            self.driver.execute_script("if (window.localStorage) { window.localStorage.clear(); }")
+            self.driver.execute_script("if (window.sessionStorage) { window.sessionStorage.clear(); }")
+            print("Browser data cleared successfully")
+        except Exception as e:
+            print(f"Error clearing browser data: {str(e)}")
 
     def __init__(self, root):
         self.root = root
@@ -290,13 +308,38 @@ class TestApp:
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def get_test_data(self, scenario):
-        choice = tk.messagebox.askyesno("Data Source", "Do you want to use pre-defined test data?")
-        if choice:
-            # Use pre-defined data from JSON file
-            return load_test_data("test_data.json").get(scenario, {})
-        else:
-            # Get custom data from user
-            return self.get_custom_data(scenario)
+        print(f"Entering get_test_data for scenario: {scenario}")
+        scenario_mapping = {
+            "register": "register",
+            "login": "login"
+        }
+        try:
+            print("Attempting to load test data...")
+            data = load_test_data("test_data.json")
+            print(f"Loaded test data: {data}")
+
+            scenario_key = scenario_mapping.get(scenario, scenario)
+            print(f"Attempting to get scenario data for '{scenario_key}'")
+            scenario_data = data.get(scenario_key, {})
+            if not scenario_data:
+                print(f"Warning: No data found for scenario '{scenario_key}'")
+            print(f"Loaded data for {scenario}: {scenario_data}")
+
+            print("Displaying messagebox...")
+            choice = messagebox.askyesno("Data Source", "Do you want to use pre-defined test data?")
+            print(f"User choice: {'Pre-defined' if choice else 'Custom'}")
+
+            if choice:
+                return scenario_data
+            else:
+                return self.get_custom_data(scenario)
+        except Exception as e:
+            print(f"Error in get_test_data: {e}")
+            print(f"Error type: {type(e)}")
+            print(f"Error traceback: {traceback.format_exc()}")
+            return {}
+        finally:
+            print("Exiting get_test_data")
         
     def get_custom_data(self, scenario):
         # Define the fields required for each scenario
@@ -494,7 +537,8 @@ class TestApp:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
 
-    def run_test(self, scenario, website, email,data=None):
+    @retry(tries=3, delay=2, backoff=2)
+    def run_test(self, scenario, website, email, data=None):
 
         self.test_var.set(scenario)
         self.website_var.set(website)
@@ -521,10 +565,12 @@ class TestApp:
 
             data = self.get_test_data(scenario)
 
+            print(f"Data being used for {scenario}: {data}")  
+
             if scenario == "register":
                 test_scenarios.test_user_registration(self, data) 
             elif scenario == "login":
-                test_scenarios.test_user_login(self, data)
+                 test_scenarios.test_user_login(self, data)
             elif scenario == "open_account":
                 test_scenarios.test_open_account(self)
             elif scenario == "overview":
@@ -555,7 +601,7 @@ class TestApp:
             })
         finally:
             if self.driver:
-                self.driver.quit()
+                self.close_driver()
 
             if scenario in self.screenshots:
                 self.compare_scenario_screenshots(scenario)
@@ -610,7 +656,7 @@ def main():
     data_key = scenario_key_map.get(args.scenario, args.scenario)
     # Get the specific data for the scenario
     data = test_data.get(data_key, {})
-    print("Scenario Data: ", data)  # Debugging line
+    print(f"Scenario: {args.scenario}, Data key: {data_key}, Data: {data}")
 
 
     app.run_test(args.scenario, args.website, args.email,data)

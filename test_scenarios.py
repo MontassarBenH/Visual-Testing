@@ -69,19 +69,48 @@ def test_user_login(app, data):
         app.driver.get(app.website_var.get())
         app.take_screenshot("login_home_page")
 
-        print(f"Form Data: {data}")  # Debugging line
+        print(f"Login data: {data}")  # Debug line
 
+        username = data.get('username', '')
+        password = data.get('password', '')
 
-        form_data = {(By.NAME, key): value for key, value in data.items()}
-        app.fill_form(form_data)
+        if not username or not password:
+            raise ValueError("Username or password is empty")
 
-        app.find_element(By.NAME, "password").send_keys(Keys.RETURN)
-        time.sleep(6)
-        app.take_screenshot("login_logged_in.png")
-    except NoSuchWindowException:
-        print("Error: Browser window was closed unexpectedly.")
+        # Use explicit waits
+        username_field = WebDriverWait(app.driver, 10).until(
+            EC.element_to_be_clickable((By.NAME, "username"))
+        )
+        password_field = WebDriverWait(app.driver, 10).until(
+            EC.element_to_be_clickable((By.NAME, "password"))
+        )
+
+        username_field.clear()
+        username_field.send_keys(username)
+        password_field.clear()
+        password_field.send_keys(password)
+
+        login_button = WebDriverWait(app.driver, 10).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "input[value='Log In']"))
+        )
+        login_button.click()
+
+        # Add an explicit wait for a element that indicates successful login
+        WebDriverWait(app.driver, 10).until(
+            EC.presence_of_element_located((By.LINK_TEXT, "Log Out"))
+        )
+
+        app.take_screenshot("login_logged_in")
+        print("Login successful")
+    except ValueError as ve:
+        print(f"Login Error: {ve}")
+        app.take_screenshot("login_error_empty_credentials")
+    except TimeoutException:
+        print("Login Error: Timed out waiting for page elements")
+        app.take_screenshot("login_error_timeout")
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Login Error: {str(e)}")
+        app.take_screenshot("login_error_unknown")
 
 def test_open_account(app):
     try:
