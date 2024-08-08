@@ -36,6 +36,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 # Tkinter imports
 import tkinter as tk
 from tkinter import filedialog, ttk
+from tkinter import Toplevel
+
 
 # Local application imports
 from data_loader import load_test_data
@@ -118,7 +120,50 @@ class TestApp:
         self.test_var = tk.StringVar()
         self.website_var = tk.StringVar()
 
-        self.setup_ui()
+        self.setup_initial_ui()
+
+    def setup_initial_ui(self):
+        self.initial_frame = ttk.Frame(self.root)
+        self.initial_frame.pack(padx=20, pady=20, fill=tk.BOTH, expand=True)
+
+        ttk.Label(self.initial_frame, text="Test Scenario:").grid(row=0, column=0, sticky="w", pady=5)
+        self.scenario_var = tk.StringVar()
+        self.scenario_combobox = ttk.Combobox(self.initial_frame, textvariable=self.scenario_var)
+        self.scenario_combobox['values'] = ('register', 'login', 'open_account', 'overview', 'view_overview', 'visual_test')
+        self.scenario_combobox.grid(row=0, column=1, pady=5)
+
+        ttk.Label(self.initial_frame, text="Website URL:").grid(row=1, column=0, sticky="w", pady=5)
+        self.website_entry = ttk.Entry(self.initial_frame)
+        self.website_entry.grid(row=1, column=1, pady=5)
+
+        ttk.Label(self.initial_frame, text="Email:").grid(row=2, column=0, sticky="w", pady=5)
+        self.email_entry = ttk.Entry(self.initial_frame)
+        self.email_entry.grid(row=2, column=1, pady=5)
+
+        self.data_choice_var = tk.StringVar(value="default")
+        ttk.Radiobutton(self.initial_frame, text="Use Default Data", variable=self.data_choice_var, value="default").grid(row=3, column=0, pady=5)
+        ttk.Radiobutton(self.initial_frame, text="Use Custom Data", variable=self.data_choice_var, value="custom").grid(row=3, column=1, pady=5)
+
+        ttk.Button(self.initial_frame, text="Run Test", command=self.start_test).grid(row=4, column=0, columnspan=2, pady=20)
+
+    def start_test(self):
+        scenario = self.scenario_var.get()
+        website = self.website_entry.get()
+        email = self.email_entry.get()
+        use_custom_data = self.data_choice_var.get() == "custom"
+
+        if not scenario or not website or not email:
+            messagebox.showerror("Error", "Please fill in all fields.")
+            return
+
+        self.initial_frame.pack_forget()
+        self.setup_ui()  
+
+        #data = None
+        #if use_custom_data:
+            #data = self.get_custom_data(scenario)
+
+        self.run_test(scenario, website, email, use_custom_data)
 
     def setup_ui(self):
         main_frame = ttk.Frame(self.root)
@@ -353,12 +398,31 @@ class TestApp:
             "login": ["username", "password"],
         }
 
-        default_data = {field: "" for field in fields.get(scenario, [])}
+        custom_data = {}
         
-        custom_data_form = CustomDataForm(self.root, default_data)
-        self.root.wait_window(custom_data_form)
+        # Create a new top-level window
+        custom_data_window = tk.Toplevel(self.root)
+        custom_data_window.title(f"Enter Custom Data for {scenario}")
         
-        return custom_data_form.result if custom_data_form.result else default_data
+        # Create and place entry fields
+        entries = {}
+        for i, field in enumerate(fields.get(scenario, [])):
+            tk.Label(custom_data_window, text=field).grid(row=i, column=0, sticky="e", padx=5, pady=2)
+            entry = tk.Entry(custom_data_window)
+            entry.grid(row=i, column=1, padx=5, pady=2)
+            entries[field] = entry
+    
+        def submit_data():
+            for field, entry in entries.items():
+                    custom_data[field] = entry.get()
+            custom_data_window.destroy()
+            
+        tk.Button(custom_data_window, text="Submit", command=submit_data).grid(row=len(fields.get(scenario, [])), column=0, columnspan=2, pady=10)
+            
+            # Wait for the window to be closed
+        self.root.wait_window(custom_data_window)
+            
+        return custom_data
 
     def compare_images(self, img1_path, img2_path):
         # Open and convert images to grayscale
@@ -538,7 +602,7 @@ class TestApp:
                 os.remove(temp_file)
 
     @retry(tries=3, delay=2, backoff=2)
-    def run_test(self, scenario, website, email, data=None):
+    def run_test(self, scenario, website, email, use_custom_data):
 
         self.test_var.set(scenario)
         self.website_var.set(website)
@@ -562,10 +626,15 @@ class TestApp:
         self.screenshots.clear()
 
         try:
+            #if data is None:
+             #data = self.get_test_data(scenario)
 
-            data = self.get_test_data(scenario)
+            #print(f"Data being used for {scenario}: {data}")  
 
-            print(f"Data being used for {scenario}: {data}")  
+            if use_custom_data:
+                data = self.get_custom_data(scenario)
+            else:
+                data = load_test_data("test_data.json").get(scenario, {})
 
             if scenario == "register":
                 test_scenarios.test_user_registration(self, data) 
@@ -632,35 +701,8 @@ class TestApp:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run automated tests for web applications.")
-    parser.add_argument("--scenario", required=True, help="Name of the test scenario to run")
-    parser.add_argument("--website", required=True, help="Website URL to test")
-    parser.add_argument("--email", required=True, help="Email address to send the report")
-    args = parser.parse_args()
-
     root = tk.Tk()
     app = TestApp(root)
-
-    test_data = load_test_data("test_data.json")
-
-    print(f"Scenario Argument: {args.scenario}")  # Debugging line
-    print(f"Loaded Test Data: {test_data}")       # Debugging line
-
-     # Map scenario argument to JSON keys
-    scenario_key_map = {
-        "register": "user_registration",
-        "login": "user_login"
-    }
-
-
-    data_key = scenario_key_map.get(args.scenario, args.scenario)
-    # Get the specific data for the scenario
-    data = test_data.get(data_key, {})
-    print(f"Scenario: {args.scenario}, Data key: {data_key}, Data: {data}")
-
-
-    app.run_test(args.scenario, args.website, args.email,data)
-
     root.mainloop()
 
 
